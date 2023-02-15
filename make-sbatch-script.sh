@@ -6,7 +6,7 @@ cat <<EoF
 ################################################################################
 
 # normal cpu stuff: allocate cpus, memory
-#SBATCH --ntasks=1 --cpus-per-task=16 --mem=40000M
+#SBATCH --ntasks=1 --cpus-per-task=4 --mem=10000M
 
 # we run on the gpu partition and we allocate 2 titanx gpus
 #SBATCH -p gpu --gres=gpu:1

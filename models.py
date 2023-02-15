@@ -7,9 +7,9 @@ class Baseline(nn.Module):
             self,
             in_features=5,
             out_features=37,
-            n_hidden=15,
+            n_hidden=37,
             min_sd=0.1,
-            dropout=True
+            dropout=False
     ):
         super(Baseline, self).__init__()
         n_hidden = 2 * n_hidden if dropout else n_hidden
@@ -43,18 +43,74 @@ class Baseline(nn.Module):
         return self.mean_net(x), self.sd_net(x) + self.min_sd
 
 
+class BaselinePlus(nn.Module):
+    def __init__(
+            self,
+            in_features=5,
+            out_features=37,
+            n_hidden=37,
+            min_sd=0.1,
+            dropout=False,
+            n_hidden_layers=1
+    ):
+        super(BaselinePlus, self).__init__()
+        n_hidden = 2 * n_hidden if dropout else n_hidden
+        self.shared_net = nn.Sequential(
+            nn.Linear(in_features, n_hidden),
+            nn.BatchNorm1d(n_hidden),
+            nn.ReLU(),
+            nn.Dropout() if dropout else nn.Identity(),
+        )
+        self.mean_layers = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_hidden, n_hidden),
+                nn.BatchNorm1d(n_hidden),
+                nn.ReLU(),
+                nn.Dropout() if dropout else nn.Identity(),
+            )
+            for _ in range(n_hidden_layers)
+        ])
+        self.mean_layers.append(nn.Linear(n_hidden, out_features))
+        self.sd_layers = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_hidden, n_hidden),
+                nn.BatchNorm1d(n_hidden),
+                nn.ReLU(),
+                nn.Dropout() if dropout else nn.Identity(),
+            )
+            for _ in range(n_hidden_layers)
+        ])
+        self.sd_layers.append(
+            nn.Sequential(
+                nn.Linear(n_hidden, out_features),
+                nn.Softplus(threshold=20)
+            )
+        )
+        self.min_sd = min_sd
+        self.dropout = dropout
+        self.n_hidden_layers = n_hidden_layers
+
+    def forward(self, y, z):
+        x = torch.cat((y, z), dim=1)
+        x_mean = self.shared_net(x)
+        x_sd = x_mean
+        for mean_layer, sd_layer in zip(self.mean_layers, self.sd_layers):
+            x_mean = mean_layer(x_mean)
+            x_sd = sd_layer(x_sd)
+        return x_mean, x_sd + self.min_sd
+
+
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, kernel_size, downsampler=None):
         super(BasicBlock, self).__init__()
-        block_channels = in_channels if downsampler is None else 2 * in_channels
-        first_stride = 1 if downsampler is None else 2
+        block_channels = \
+            in_channels if downsampler is None else in_channels // 2
         padding = kernel_size // 2
         self.net = nn.Sequential(
             nn.Conv1d(
                 in_channels,
                 block_channels,
                 kernel_size,
-                stride=first_stride,
                 padding=padding
             ),
             nn.BatchNorm1d(block_channels),
@@ -83,16 +139,16 @@ class ResNet(nn.Module):
         downsampler = nn.Sequential(
             nn.Conv1d(
                 in_channels,
-                2 * in_channels,
+                in_channels // 2,
                 kernel_size=1,
-                stride=2,
                 bias=False
             ),
-            nn.BatchNorm1d(2 * in_channels)
+            nn.BatchNorm1d(in_channels // 2)
         )
         blocks = [BasicBlock(in_channels, kernel_size, downsampler)]
         blocks += [
-            BasicBlock(2*in_channels, kernel_size) for _ in range(n_blocks - 1)
+            BasicBlock(in_channels // 2, kernel_size) for _ in
+            range(n_blocks - 1)
         ]
         return nn.Sequential(*blocks)
 
@@ -100,8 +156,8 @@ class ResNet(nn.Module):
             self,
             in_features=5,
             out_features=37,
-            up_dim_size=20,
-            up_channel_size=2,
+            up_dim_size=37,
+            up_channel_size=8,
             n_blocks=2,
             n_layers=2,
             kernel_size=3,
@@ -116,12 +172,13 @@ class ResNet(nn.Module):
             nn.ReLU()
         )
         self.res_layers = nn.ModuleList(
-            [self._make_layer(2**i * up_channel_size, kernel_size, n_blocks)
+            [self._make_layer(up_channel_size // 2 ** i, kernel_size, n_blocks)
              for i in range(n_layers)]
         )
-        self.mean_net = nn.Linear(up_dim_size * up_channel_size, out_features)
+        final_size = up_dim_size * (up_channel_size // 2 ** n_layers)
+        self.mean_net = nn.Linear(final_size, out_features)
         self.sd_net = nn.Sequential(
-            nn.Linear(up_dim_size * up_channel_size, out_features),
+            nn.Linear(final_size, out_features),
             nn.Softplus(threshold=20)
         )
         self.min_sd = min_sd

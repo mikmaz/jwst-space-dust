@@ -6,8 +6,44 @@ import models
 import random
 import numpy as np
 
-models_dict = {'baseline': models.Baseline, 'resnet': models.ResNet}
+models_dict = {
+    'baseline': models.Baseline,
+    'resnet': models.ResNet,
+    'baseline_plus': models.BaselinePlus
+}
 
+train_data_stats = {
+    'x_stats': (
+        torch.tensor([
+            20.2991, 20.3594, 20.5216, 20.6499, 20.6884, 20.7566, 56.7391,
+            20.8051, 20.8188, 20.8106, 20.8311, 20.8382, 20.8223, 20.7754,
+            20.7643, 20.6633, 40.8093, 20.7137, 20.6758, 20.6740, 20.6480,
+            20.6355, 20.6321, 20.6082, 20.6096, 50.4091, 24.4606, 20.6052,
+            20.5891, 20.5126, 20.3633, 20.5775, 20.8624, 21.1913, 21.3462,
+            21.6417, 22.2701
+        ]),
+        torch.tensor([
+            2.5650, 2.5722, 2.5750, 2.5867, 2.5721, 2.5775, 9.5015, 2.5714,
+            2.5902, 2.5719, 2.5873, 2.6007, 2.6480, 2.6817, 2.7239, 2.7723,
+            18.4062, 2.7917, 2.8240, 2.8472, 2.9029, 2.9138, 2.9358, 2.9485,
+            2.9849, 16.7919, 12.1996, 3.0012, 3.0786, 3.2332, 3.3696, 3.4180,
+            3.3891, 3.4233, 3.5180, 3.5676, 3.9185
+        ])
+    ),
+    'y_stats': (
+        torch.tensor([-3.5011e+00, -8.0059e-01, 4.9956e-01, 1.0195e+03]),
+        torch.tensor([1.4426e+00, 8.6663e-01, 2.8851e-01, 4.2714e+02])
+    ),
+    'z_stats': (torch.tensor([0.0075]), torch.tensor([0.0043]))
+}
+
+filter_names = [
+    70, 90, 115, 140, 150, 162, 164, 182, 187, 200, 210, 212, 250, 277, 300,
+    322, 323, 335, 356, 360, 405, 410, 430, 444, 460, 466, 470, 480, 560, 770,
+    1000, 1130, 1280, 1500, 1800, 2100, 2550
+]
+
+sample_points = [215768, 407206, 566926, 761167, 433044]
 
 def get_device():
     if torch.cuda.is_available():
@@ -48,7 +84,7 @@ def parse_args():
         help="model's keyword arguments passed as a dictionary"
     )
     parser.add_argument(
-        "--batch", default=128, type=int, help="batch size"
+        "--batch", default=64, type=int, help="batch size"
     )
     parser.add_argument(
         "--lr", default=1e-3, type=float, help="learning rate"
@@ -97,21 +133,19 @@ class JWSTSpaceDustDataset(Dataset):
     def __getitem__(self, idx):
         return self.x[idx], self.y[idx], self.z[idx]
 
-    def normalize(self, y_stats=None, z_stats=None):
-        def normalize_feature(feature):
-            mean = feature.mean(dim=0)
-            sd = feature.std(dim=0)
+    def normalize(self, x_stats=None, y_stats=None, z_stats=None):
+        def normalize_feature(feature, stats):
+            if stats is None:
+                mean = feature.mean(dim=0)
+                sd = feature.std(dim=0)
+            else:
+                mean, sd = stats
             return (feature - mean) / sd, mean, sd
 
-        if y_stats is None or z_stats is None:
-            normalized_y, y_mean, y_sd = normalize_feature(self.y)
-            self.y = normalized_y
-            normalized_z, z_mean, z_sd = normalize_feature(self.z)
-            self.z = normalized_z
-            return (y_mean, y_sd), (z_mean, z_sd)
-        else:
-            self.y = (self.y - y_stats[0]) / y_stats[1]
-            self.z = (self.z - z_stats[0]) / z_stats[1]
+        self.x, x_mean, x_sd = normalize_feature(self.x, x_stats)
+        self.y, y_mean, y_sd = normalize_feature(self.y, y_stats)
+        self.z, z_mean, z_sd = normalize_feature(self.z, z_stats)
+        return (x_mean, x_sd), (y_mean, y_sd), (z_mean, z_sd)
 
 
 def get_datasets_split(args):
