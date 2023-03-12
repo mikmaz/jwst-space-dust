@@ -5,13 +5,26 @@ from tqdm import tqdm
 import utils
 from ast import literal_eval
 import torch.nn.functional as F
+import math
 
 
-def loss_f(mean, sd, x):
+def loss_f_sd(mean, sd, x):
     return -torch.distributions.Normal(mean, sd).log_prob(x).sum(dim=1).mean()
 
 
-def evaluate(model, dl, device):
+def loss_f_cov(mean, l_tri_cov, d, x):
+    cov_inv = torch.bmm(
+        torch.bmm(l_tri_cov.transpose(1, 2), torch.diag_embed(d)), l_tri_cov
+    )
+    term_1 = -torch.log(d).sum(dim=1)
+    term_2 = torch.bmm(
+        torch.bmm((x - mean).unsqueeze(1), cov_inv), (x - mean).unsqueeze(2)
+    ).flatten()
+    term_3 = x.shape[1] * math.log(2 * math.pi)
+    return (0.5 * (term_1 + term_2 + term_3)).mean()
+
+
+def evaluate(model, dl, device, covariance=False):
     val_losses = []
     val_mses = []
     model.eval()
@@ -20,8 +33,12 @@ def evaluate(model, dl, device):
             x = x.to(device=device)
             y = y.to(device=device)
             z = z.to(device=device)
-            mean, sd = model(y, z)
-            loss = loss_f(mean, sd, x)
+            if covariance:
+                mean, l_tri_cov, d = model(y, z)
+                loss = loss_f_cov(mean, l_tri_cov, d, x)
+            else:
+                mean, sd = model(y, z)
+                loss = loss_f_sd(mean, sd, x)
             mse = F.mse_loss(mean, x)
             val_mses.append(mse.item())
             val_losses.append(loss.item())
@@ -37,7 +54,8 @@ def train(
         optimizer,
         n_epochs,
         device,
-        stats_path
+        stats_path,
+        covariance=False
 ):
     losses = []
     mses = []
@@ -60,8 +78,13 @@ def train(
                 x = x.to(device=device)
                 y = y.to(device=device)
                 z = z.to(device=device)
-                mean, sd = model(y, z)
-                loss = loss_f(mean, sd, x)
+                if covariance:
+                    mean, l_tri_cov, d = model(y, z)
+                    loss = loss_f_cov(mean, l_tri_cov, d, x)
+                else:
+                    mean, sd = model(y, z)
+                    loss = loss_f_sd(mean, sd, x)
+
                 with torch.no_grad():
                     mse = F.mse_loss(mean, x)
                     epoch_mses.append(mse.item())
@@ -86,7 +109,7 @@ def train(
             with open(f'{stats_path}/train_mses.txt', 'a+') as f:
                 f.write(f'{sum(epoch_mses[:-1]) / len(epoch_mses[:-1])}\n')
 
-            val_loss, val_mse = evaluate(model, val_dl, device)
+            val_loss, val_mse = evaluate(model, val_dl, device, covariance)
             with open(f'{stats_path}/val_losses.txt', 'a+') as f:
                 f.write(f'{val_loss}\n')
             with open(f'{stats_path}/val_mses.txt', 'a+') as f:
@@ -97,7 +120,8 @@ def train(
                     model.state_dict(),
                     f"{stats_path}/checkpoint/best_model.pt"
                 )
-            losses.append(sum(epoch_losses) / len(epoch_losses))
+            losses.append(sum(epoch_losses[:-1]) / len(epoch_losses[:-1]))
+            mses.append(sum(epoch_mses[:-1]) / len(epoch_mses[:-1]))
 
     return model, losses
 
@@ -142,7 +166,8 @@ def main(args):
         optimizer,
         epochs,
         device,
-        args.stats_path
+        args.stats_path,
+        args.covariance
     )
     torch.save(
         model.state_dict(), f"{args.stats_path}/checkpoint/final_model.pt"

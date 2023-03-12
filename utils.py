@@ -6,10 +6,14 @@ import models
 import random
 import numpy as np
 
+import models_old
+
 models_dict = {
     'baseline': models.Baseline,
-    'resnet': models.ResNet,
-    'baseline_plus': models.BaselinePlus
+    'resnet_sd': models.ResNetSd,
+    'baseline_plus': models.BaselinePlus,
+    'resnet_cov': models.ResNetCov,
+    'resnet_old': models_old.ResNet
 }
 
 train_data_stats = {
@@ -44,6 +48,7 @@ filter_names = [
 ]
 
 sample_points = [215768, 407206, 566926, 761167, 433044]
+
 
 def get_device():
     if torch.cuda.is_available():
@@ -108,6 +113,11 @@ def parse_args():
         "--normalize",
         action="store_true",
         help="if set, datasets will be normalized"
+    )
+    parser.add_argument(
+        "--covariance",
+        action="store_true",
+        help="if set, training routine will assume model predicting covariance"
     )
     parser.add_argument('data_path', type=str, help="path to ECGs' directory")
     parser.add_argument('stats_path', type=str)
@@ -205,3 +215,16 @@ def fixed_train_val_split(f_path_in, dir_out, val_frac):
     val_indexes = perm[:val_dataset_size]
     save_indexes(train_indexes, 'sampled_filters_train.pkl')
     save_indexes(val_indexes, 'sampled_filters_val.pkl')
+
+
+def reconstruct_precision(l_tri_inv, d_inv):
+    return torch.bmm(
+        torch.bmm(l_tri_inv.transpose(1, 2), torch.diag_embed(d_inv)), l_tri_inv
+    )
+
+def reconstruct_cov(l_tri_inv, d_inv):
+    d = torch.reciprocal(d_inv)
+    l_tri = torch.linalg.solve_triangular(l_tri_inv, torch.eye(d.shape[1]), upper=False)
+    return torch.bmm(
+        torch.bmm(l_tri, torch.diag_embed(d)), l_tri.transpose(1, 2)
+    )
